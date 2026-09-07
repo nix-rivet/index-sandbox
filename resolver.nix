@@ -1,5 +1,7 @@
 {
-  index,
+  index ? null,
+  routing ? null,
+  layout ? "balanced",
   package,
   version,
   attribute ? null,
@@ -14,7 +16,30 @@ let
   requestedVersion = requireString "version" version;
   requestedAttribute =
     if attribute == null then null else requireString "attribute" attribute;
-  root = builtins.fromJSON (builtins.readFile (index + "/manifest.json"));
+  recursive = routing != null && routing ? recursive;
+  routeKey = builtins.hashString "sha256" requestedPackage + builtins.hashString "sha256" requestedVersion;
+  fetchNode = descriptor:
+    let path = builtins.fetchTarball {
+      url = "${routing.recursive.base_url}/v1/nodes/sha256/${descriptor.sha256}/node.tar.gz";
+      sha256 = descriptor.nar_hash;
+    }; in builtins.fromJSON (builtins.readFile (path + "/node.json"));
+  walk = depth: previousOffset: descriptor:
+    let node = fetchNode descriptor; in
+    if depth > 128 || node.schema != "nix-rivet.recursive-node/v1" then fail "invalid recursive index node or excessive depth"
+    else if node.kind == "leaf" then node
+    else if node.kind != "branch" || !builtins.isInt node.offset || node.offset <= previousOffset || node.offset >= 128 then
+      fail "invalid recursive routing offset"
+    else let digit = builtins.substring node.offset 1 routeKey; in
+      if !(builtins.hasAttr digit node.children) then fail "package/version was not found in the indexed corpus"
+      else walk (depth + 1) node.offset node.children.${digit};
+  leaf = walk 1 (-1) routing.recursive.root;
+  selectedIndex = if recursive then builtins.fetchTarball {
+    url = builtins.replaceStrings [ "tarball+" ] [ "" ] routing.index.url;
+    sha256 = routing.recursive.fat_nar_hash;
+  } else index;
+  _layout = if builtins.elem layout [ "balanced" "fat" ] then true else fail "layout must be balanced or fat";
+  root = if recursive && layout == "balanced" then leaf.manifest
+    else builtins.fromJSON (builtins.readFile (selectedIndex + "/manifest.json"));
   _schema =
     if builtins.elem root.schema [ "nix-rivet.index/v0" "nix-rivet.index/v1" ] then true else fail "unsupported index schema";
   _policy =
@@ -26,9 +51,10 @@ let
   _system =
     if root.system == "x86_64-linux" then true else fail "unsupported index system";
   bucketName = builtins.substring 0 2 (builtins.hashString "sha256" requestedPackage);
-  bucketPath = index + "/buckets/${bucketName}.json";
+  bucketPath = selectedIndex + "/buckets/${bucketName}.json";
   bucket =
-    if builtins.pathExists bucketPath then
+    if recursive && layout == "balanced" then leaf.packages
+    else if builtins.pathExists bucketPath then
       builtins.fromJSON (builtins.readFile bucketPath)
     else
       fail "index bucket ${bucketName} is missing";
@@ -85,6 +111,7 @@ let
     else
       fail "recorded attribute ${builtins.toJSON (attributeText selected)} has no string version";
 in
+assert _layout;
 assert _schema;
 assert _system;
 assert _policy;
