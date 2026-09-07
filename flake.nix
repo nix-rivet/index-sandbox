@@ -1,6 +1,6 @@
 {
   inputs.rivet-index = {
-    url = "tarball+https://pub-661f1abeaa7647bc83e673087e6ff162.r2.dev/v0/indexes/sha256/51735d3da5c6f60b7ec5be7633c02a7858d296268651144a073a210438385205/index.tar.gz";
+    url = "tarball+https://pub-661f1abeaa7647bc83e673087e6ff162.r2.dev/v0/indexes/sha256/cd691e2681e60a624482dcad5757d45864c962d6cd71397677114bba63fddef7/index.tar.gz";
     flake = false;
   };
 

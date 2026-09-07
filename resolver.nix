@@ -3,6 +3,7 @@
   package,
   version,
   attribute ? null,
+  coordinatePolicy ? "latest",
 }:
 
 let
@@ -15,7 +16,13 @@ let
     if attribute == null then null else requireString "attribute" attribute;
   root = builtins.fromJSON (builtins.readFile (index + "/manifest.json"));
   _schema =
-    if root.schema == "nix-rivet.index/v0" then true else fail "unsupported index schema";
+    if builtins.elem root.schema [ "nix-rivet.index/v0" "nix-rivet.index/v1" ] then true else fail "unsupported index schema";
+  _policy =
+    if !(builtins.elem coordinatePolicy [ "earliest" "latest" ]) then
+      fail "coordinatePolicy must be earliest or latest"
+    else if coordinatePolicy == "earliest" && root.schema == "nix-rivet.index/v0" then
+      fail "earliest requires a history-aware index; this v0 index retains only latest observations"
+    else true;
   _system =
     if root.system == "x86_64-linux" then true else fail "unsupported index system";
   bucketName = builtins.substring 0 2 (builtins.hashString "sha256" requestedPackage);
@@ -49,7 +56,14 @@ let
       fail "attribute ${builtins.toJSON requestedAttribute} is not a candidate; candidates: ${candidateList}"
     else
       fail "resolution is ambiguous; specify one exact attribute from: ${candidateList}";
-  release = builtins.elemAt root.releases selected.r;
+  first = if selected ? f then selected.f else fail "history-aware candidate is missing its earliest release";
+  validIndex = value: builtins.isInt value && value >= 0 && value < builtins.length root.releases;
+  _endpoints =
+    if !(validIndex selected.r) then fail "candidate has an invalid latest release"
+    else if root.schema == "nix-rivet.index/v1" && (!(validIndex first) || first > selected.r) then
+      fail "candidate has invalid release endpoints"
+    else true;
+  release = builtins.elemAt root.releases (if coordinatePolicy == "earliest" then first else selected.r);
   source = builtins.fetchTarball {
     url = release.source.url;
     sha256 = release.source.nar_hash;
@@ -73,6 +87,8 @@ let
 in
 assert _schema;
 assert _system;
+assert _policy;
+assert _endpoints;
 {
   coordinate = {
     channel = root.channel;
@@ -82,6 +98,7 @@ assert _system;
     attribute = attributeText selected;
     package = requestedPackage;
     version = requestedVersion;
+    inherit coordinatePolicy;
   };
   inherit evaluatedVersion;
   derivation =
